@@ -1,4 +1,4 @@
-# binance_coins# Binance New Listing Trading Bot
+# Binance New Listing Trading Bot
 
 An automated trading bot that monitors Binance futures for new coin listings and automatically places long trades with stop-loss and take-profit orders.
 
