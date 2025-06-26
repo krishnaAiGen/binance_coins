@@ -27,7 +27,7 @@ class ListingMonitorBot:
             
             # Load configuration from environment
             self.check_interval = int(os.getenv('CHECK_INTERVAL', 60))
-            self.retry_delay = int(os.getenv('RETRY_DELAY', 3))
+            self.retry_delay = int(os.getenv('RETRY_DELAY', 2))
             self.max_retries = int(os.getenv('MAX_RETRIES', 3))
             
             # Data storage files

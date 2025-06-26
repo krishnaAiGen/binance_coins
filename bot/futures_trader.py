@@ -109,9 +109,8 @@ class FuturesTrader:
             # Calculate quantity with leverage
             quantity = (trade_balance * self.leverage) / current_price
             
-            # Get symbol precision and round quantity
-            precision = self.get_symbol_precision(symbol)
-            rounded_quantity = round(quantity, precision)
+            # Force integer quantity always
+            rounded_quantity = int(round(quantity))
             
             print(f"Calculated quantity: {rounded_quantity}")
             return rounded_quantity
@@ -153,88 +152,20 @@ class FuturesTrader:
             except Exception as e:
                 print(f"Warning: Could not set leverage: {e}")
             
-            # Place market buy order
-            market_order = self.client.futures_create_order(
-                symbol=symbol,
-                side=SIDE_BUY,
-                type=ORDER_TYPE_MARKET,
-                quantity=quantity
-            )
-            
-            print(f"Market long order placed successfully for {symbol}")
-            print(f"Order details: {market_order}")
-            
-            # Get updated price after order execution
-            entry_price = self.get_current_price(symbol)
-            price_precision = self.get_price_precision(entry_price)
-            
-            # Calculate stop loss price
-            stop_loss_price = entry_price * (1 - self.stop_loss_percent / 100)
-            stop_loss_price = round(stop_loss_price, price_precision)
-            
-            # Calculate take profit price
-            take_profit_price = entry_price * (1 + self.target_profit_percent / 100)
-            take_profit_price = round(take_profit_price, price_precision)
-            
-            # Place stop loss order
+            # Try to place single order first
             try:
-                stop_loss_order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=SIDE_SELL,
-                    type='STOP_MARKET',
-                    stopPrice=stop_loss_price,
-                    closePosition='true'
-                )
-                print(f"Stop loss order placed at {stop_loss_price}")
+                return self._place_single_long_trade(symbol, quantity, current_price)
             except Exception as e:
-                print(f"Warning: Could not place stop loss: {e}")
-                stop_loss_order = None
-            
-            # Place take profit order
-            try:
-                take_profit_order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=SIDE_SELL,
-                    type='LIMIT',
-                    price=take_profit_price,
-                    quantity=quantity,
-                    timeInForce='GTC'
-                )
-                print(f"Take profit order placed at {take_profit_price}")
-            except Exception as e:
-                print(f"Warning: Could not place take profit: {e}")
-                take_profit_order = None
-            
-            # Calculate trade amount
-            trade_amount = entry_price * quantity
-            
-            # Prepare trade info for notification
-            trade_info = {
-                'success': True,
-                'symbol': symbol,
-                'entry_price': entry_price,
-                'quantity': quantity,
-                'stop_loss_price': stop_loss_price,
-                'stop_loss_pct': self.stop_loss_percent,
-                'take_profit_price': take_profit_price,
-                'profit_target_pct': self.target_profit_percent,
-                'leverage': self.leverage,
-                'trade_amount': round(trade_amount, 2)
-            }
-            
-            # Send success notification to Slack
-            self.slack.post_trade_notification(trade_info)
-            
-            return {
-                'success': True,
-                'market_order': market_order,
-                'stop_loss_order': stop_loss_order,
-                'take_profit_order': take_profit_order,
-                'entry_price': entry_price,
-                'stop_loss_price': stop_loss_price,
-                'take_profit_price': take_profit_price,
-                'quantity': quantity
-            }
+                error_str = str(e)
+                print(f"Single order failed: {error_str}")
+                
+                # Check if it's a quantity-related error or any other error that might benefit from splitting
+                if "quantity" in error_str.lower() or "size" in error_str.lower() or "notional" in error_str.lower():
+                    print("Attempting to break order into smaller chunks...")
+                    return self._place_multiple_long_trades(symbol, quantity, current_price)
+                else:
+                    # Re-raise the exception if it's not quantity-related
+                    raise e
             
         except Exception as e:
             error_msg = f"Error placing long trade for {symbol}: {e}"
@@ -251,6 +182,259 @@ class FuturesTrader:
             return {
                 'success': False,
                 'error': str(e)
+            }
+
+    def _place_single_long_trade(self, symbol, quantity, current_price):
+        """Place a single long trade"""
+        # Place market buy order
+        market_order = self.client.futures_create_order(
+            symbol=symbol,
+            side=SIDE_BUY,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity
+        )
+        
+        print(f"Market long order placed successfully for {symbol}")
+        print(f"Order details: {market_order}")
+        
+        # Get updated price after order execution
+        entry_price = self.get_current_price(symbol)
+        price_precision = self.get_price_precision(entry_price)
+        
+        # Calculate stop loss and take profit prices
+        stop_loss_price = entry_price * (1 - self.stop_loss_percent / 100)
+        stop_loss_price = round(stop_loss_price, price_precision)
+        
+        take_profit_price = entry_price * (1 + self.target_profit_percent / 100)
+        take_profit_price = round(take_profit_price, price_precision)
+        
+        # Place stop loss order
+        stop_loss_order = None
+        try:
+            stop_loss_order = self.client.futures_create_order(
+                symbol=symbol,
+                side=SIDE_SELL,
+                type='STOP_MARKET',
+                stopPrice=stop_loss_price,
+                closePosition='true'
+            )
+            print(f"Stop loss order placed at {stop_loss_price}")
+        except Exception as e:
+            print(f"Warning: Could not place stop loss: {e}")
+        
+        # Place take profit order
+        take_profit_order = None
+        try:
+            take_profit_order = self.client.futures_create_order(
+                symbol=symbol,
+                side=SIDE_SELL,
+                type='LIMIT',
+                price=take_profit_price,
+                quantity=quantity,
+                timeInForce='GTC'
+            )
+            print(f"Take profit order placed at {take_profit_price}")
+        except Exception as e:
+            print(f"Warning: Could not place take profit: {e}")
+        
+        # Calculate trade amount
+        trade_amount = entry_price * quantity
+        
+        # Prepare trade info for notification
+        trade_info = {
+            'success': True,
+            'symbol': symbol,
+            'entry_price': entry_price,
+            'quantity': quantity,
+            'stop_loss_price': stop_loss_price,
+            'stop_loss_pct': self.stop_loss_percent,
+            'take_profit_price': take_profit_price,
+            'profit_target_pct': self.target_profit_percent,
+            'leverage': self.leverage,
+            'trade_amount': round(trade_amount, 2)
+        }
+        
+        # Send success notification to Slack
+        self.slack.post_trade_notification(trade_info)
+        
+        return {
+            'success': True,
+            'market_order': market_order,
+            'stop_loss_order': stop_loss_order,
+            'take_profit_order': take_profit_order,
+            'entry_price': entry_price,
+            'stop_loss_price': stop_loss_price,
+            'take_profit_price': take_profit_price,
+            'quantity': quantity
+        }
+
+    def _place_multiple_long_trades(self, symbol, total_quantity, current_price):
+        """Break large order into smaller chunks and place multiple trades"""
+        MAX_ORDER_VALUE = 200.0  # Maximum value per order in USDT
+        
+        # Calculate total trade value
+        total_trade_value = total_quantity * current_price
+        print(f"Total trade value: ${total_trade_value:.2f}")
+        
+        # Calculate number of orders needed
+        num_orders = math.ceil(total_trade_value / MAX_ORDER_VALUE)
+        print(f"Breaking into {num_orders} orders (max ${MAX_ORDER_VALUE} each)")
+        
+        # Calculate quantity per order
+        base_quantity_per_order = total_quantity / num_orders
+        precision = 0  # Force integer quantities always
+        
+        successful_orders = []
+        failed_orders = []
+        
+        for i in range(num_orders):
+            try:
+                # Calculate quantity for this order (handle remainder for last order)
+                if i == num_orders - 1:
+                    # Last order gets any remaining quantity
+                    remaining_quantity = total_quantity - sum([order['quantity'] for order in successful_orders])
+                    order_quantity = int(round(remaining_quantity, precision))
+                else:
+                    order_quantity = int(round(base_quantity_per_order, precision))
+                
+                if order_quantity <= 0:
+                    continue
+                
+                print(f"\n--- Placing order {i+1}/{num_orders} ---")
+                print(f"Order quantity: {order_quantity}")
+                
+                # Place market buy order
+                market_order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side=SIDE_BUY,
+                    type=ORDER_TYPE_MARKET,
+                    quantity=order_quantity
+                )
+                
+                print(f"✅ Market order {i+1} placed successfully")
+                
+                # Get entry price for this order
+                entry_price = self.get_current_price(symbol)
+                price_precision = self.get_price_precision(entry_price)
+                
+                # Calculate stop loss and take profit prices
+                stop_loss_price = entry_price * (1 - self.stop_loss_percent / 100)
+                stop_loss_price = round(stop_loss_price, price_precision)
+                
+                take_profit_price = entry_price * (1 + self.target_profit_percent / 100)
+                take_profit_price = round(take_profit_price, price_precision)
+                
+                # Place stop loss order for this position
+                stop_loss_order = None
+                try:
+                    stop_loss_order = self.client.futures_create_order(
+                        symbol=symbol,
+                        side=SIDE_SELL,
+                        type='STOP_MARKET',
+                        stopPrice=stop_loss_price,
+                        quantity=order_quantity
+                    )
+                    print(f"✅ Stop loss order {i+1} placed at {stop_loss_price}")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not place stop loss for order {i+1}: {e}")
+                
+                # Place take profit order for this position
+                take_profit_order = None
+                try:
+                    take_profit_order = self.client.futures_create_order(
+                        symbol=symbol,
+                        side=SIDE_SELL,
+                        type='LIMIT',
+                        price=take_profit_price,
+                        quantity=order_quantity,
+                        timeInForce='GTC'
+                    )
+                    print(f"✅ Take profit order {i+1} placed at {take_profit_price}")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not place take profit for order {i+1}: {e}")
+                
+                # Calculate trade amount for this order
+                order_trade_amount = entry_price * order_quantity
+                
+                # Store successful order info
+                order_info = {
+                    'order_number': i + 1,
+                    'market_order': market_order,
+                    'stop_loss_order': stop_loss_order,
+                    'take_profit_order': take_profit_order,
+                    'entry_price': entry_price,
+                    'stop_loss_price': stop_loss_price,
+                    'take_profit_price': take_profit_price,
+                    'quantity': order_quantity,
+                    'trade_amount': round(order_trade_amount, 2)
+                }
+                
+                successful_orders.append(order_info)
+                
+                # Prepare individual trade info for notification
+                trade_info = {
+                    'success': True,
+                    'symbol': symbol,
+                    'entry_price': entry_price,
+                    'quantity': order_quantity,
+                    'stop_loss_price': stop_loss_price,
+                    'stop_loss_pct': self.stop_loss_percent,
+                    'take_profit_price': take_profit_price,
+                    'profit_target_pct': self.target_profit_percent,
+                    'leverage': self.leverage,
+                    'trade_amount': round(order_trade_amount, 2),
+                    'order_number': i + 1,
+                    'total_orders': num_orders
+                }
+                
+                # Send notification for each individual trade
+                self.slack.post_trade_notification(trade_info)
+                
+                print(f"📊 Order {i+1} Summary:")
+                print(f"   Entry Price: {entry_price}")
+                print(f"   Quantity: {order_quantity}")
+                print(f"   Trade Amount: ${order_trade_amount:.2f}")
+                print(f"   Stop Loss: {stop_loss_price} (-{self.stop_loss_percent}%)")
+                print(f"   Take Profit: {take_profit_price} (+{self.target_profit_percent}%)")
+                
+            except Exception as e:
+                error_msg = f"Failed to place order {i+1}: {e}"
+                print(f"❌ {error_msg}")
+                failed_orders.append({
+                    'order_number': i + 1,
+                    'error': str(e)
+                })
+        
+        # Summary
+        print(f"\n🎯 MULTI-ORDER SUMMARY:")
+        print(f"Total orders attempted: {num_orders}")
+        print(f"Successful orders: {len(successful_orders)}")
+        print(f"Failed orders: {len(failed_orders)}")
+        
+        if successful_orders:
+            total_successful_quantity = sum([order['quantity'] for order in successful_orders])
+            total_successful_amount = sum([order['trade_amount'] for order in successful_orders])
+            avg_entry_price = sum([order['entry_price'] * order['quantity'] for order in successful_orders]) / total_successful_quantity
+            
+            print(f"Total successful quantity: {total_successful_quantity}")
+            print(f"Total successful amount: ${total_successful_amount:.2f}")
+            print(f"Average entry price: {avg_entry_price:.4f}")
+            
+            return {
+                'success': True,
+                'orders': successful_orders,
+                'failed_orders': failed_orders,
+                'total_quantity': total_successful_quantity,
+                'total_amount': total_successful_amount,
+                'average_entry_price': avg_entry_price,
+                'num_successful_orders': len(successful_orders),
+                'num_failed_orders': len(failed_orders)
+            }
+        else:
+            return {
+                'success': False,
+                'error': f"All {num_orders} orders failed",
+                'failed_orders': failed_orders
             }
 
     def check_order_status(self, symbol, order_id):

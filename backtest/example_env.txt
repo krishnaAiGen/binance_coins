@@ -1,0 +1,9 @@
+# Copy this file to .env and fill in your actual API credentials
+# cp example_env.txt .env
+
+# Binance API Configuration
+BINANCE_API_KEY=your_binance_api_key_here
+BINANCE_API_SECRET=your_binance_api_secret_here
+
+# Slack Configuration (optional for backtesting)
+SLACK_WEBHOOK_URL=your_slack_webhook_url_here 
