@@ -184,6 +184,52 @@ class FuturesTrader:
                 'error': str(e)
             }
 
+    def place_fixed_amount_trade(self, symbol, usd_amount):
+        """Place a trade for a specific USD amount without order splitting"""
+        try:
+            print(f"Attempting to place ${usd_amount} trade for {symbol}")
+            
+            # Get current price
+            current_price = self.get_current_price(symbol)
+            if not current_price:
+                raise Exception(f"Could not get current price for {symbol}")
+            
+            # Calculate quantity based on USD amount and leverage
+            quantity = (usd_amount * self.leverage) / current_price
+            quantity = int(round(quantity))  # Force integer quantity
+            
+            if quantity <= 0:
+                raise Exception(f"Calculated quantity is zero or negative: {quantity}")
+            
+            print(f"Calculated quantity for ${usd_amount}: {quantity}")
+            
+            # Set leverage
+            try:
+                self.client.futures_change_leverage(symbol=symbol, leverage=self.leverage)
+                print(f"Leverage set to {self.leverage}x for {symbol}")
+            except Exception as e:
+                print(f"Warning: Could not set leverage: {e}")
+            
+            # Place the trade (without order splitting)
+            return self._place_single_long_trade(symbol, quantity, current_price)
+            
+        except Exception as e:
+            error_msg = f"Error placing fixed amount trade for {symbol}: {e}"
+            print(error_msg)
+            
+            # Send error notification to Slack
+            trade_info = {
+                'success': False,
+                'symbol': symbol,
+                'error': str(e)
+            }
+            self.slack.post_trade_notification(trade_info)
+            
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
     def _place_single_long_trade(self, symbol, quantity, current_price):
         """Place a single long trade"""
         # Place market buy order

@@ -184,4 +184,47 @@ class SlackNotifier:
             
         except Exception as e:
             print(f"Error creating retry notification: {e}")
+            return False
+
+    def post_trade_attempts_summary(self, summary_info):
+        """Post a summary of trade attempts to Slack"""
+        if not self.webhook_url:
+            print("Slack webhook URL not configured")
+            return False
+            
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Create summary message
+            if summary_info['trade_placed']:
+                # Successful trade
+                message = {
+                    "✅ TRADE ATTEMPT SUCCESS": f"TRADE PLACED ON ATTEMPT #{summary_info['successful_attempt']}",
+                    "Time": timestamp,
+                    "Symbol": summary_info['symbol'],
+                    "Trade Amount": f"${summary_info['trade_amount']}",
+                    "Successful Attempt": f"#{summary_info['successful_attempt']}",
+                    "Total Attempts Made": f"{summary_info['total_attempts']}/{summary_info['max_attempts']}",
+                    "Failed Attempts": f"{summary_info['failed_attempts']} before success",
+                    "Strategy": summary_info['strategy'],
+                    "Status": "✅ POSITION OPENED WITH SL/TP"
+                }
+            else:
+                # All attempts failed
+                message = {
+                    "❌ TRADE ATTEMPT FAILURE": f"ALL {summary_info['max_attempts']} ATTEMPTS FAILED",
+                    "Time": timestamp,
+                    "Symbol": summary_info['symbol'],
+                    "Trade Amount": f"${summary_info['trade_amount']} (attempted)",
+                    "Total Attempts": f"{summary_info['total_attempts']}/{summary_info['max_attempts']}",
+                    "Failed Attempts": f"#{', #'.join(map(str, summary_info['failed_attempt_numbers']))}" if summary_info['failed_attempt_numbers'] else "All",
+                    "Duration": "2 minutes (8 attempts @ 15s intervals)",
+                    "Strategy": summary_info['strategy'],
+                    "Status": "❌ NO POSITION OPENED"
+                }
+            
+            return self.post_to_slack(message)
+            
+        except Exception as e:
+            print(f"Error creating trade attempts summary: {e}")
             return False 

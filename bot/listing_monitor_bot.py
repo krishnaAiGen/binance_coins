@@ -30,6 +30,11 @@ class ListingMonitorBot:
             self.retry_delay = int(os.getenv('RETRY_DELAY', 2))
             self.max_retries = int(os.getenv('MAX_RETRIES', 3))
             
+            # New trading configuration for multiple trades
+            self.trade_interval = 15  # 15 seconds between trades
+            self.total_trades = 8     # Total number of trades (8 trades over 2 minutes)
+            # Trade amount will be calculated dynamically from balance and percentage
+            
             # Data storage files
             self.futures_data_file = 'futures_pairs.json'
             self.processed_pairs_file = 'processed_pairs.json'
@@ -45,6 +50,10 @@ class ListingMonitorBot:
             print(f"Check interval: {self.check_interval} seconds")
             print(f"Retry delay: {self.retry_delay} seconds")
             print(f"Max retries: {self.max_retries}")
+            print(f"Trade strategy: ONE trade per listing, up to {self.total_trades} attempts")
+            print(f"Trade amount: Calculated from balance × balance_percentage")
+            print(f"Attempt interval: {self.trade_interval} seconds between attempts")
+            print(f"Strategy: Stop attempting once trade is successfully placed")
             
         except Exception as e:
             print(f"Error initializing listing monitor bot: {e}")
@@ -153,43 +162,130 @@ class ListingMonitorBot:
             self.slack.post_error_to_slack(f"Error detecting new listings: {e}")
             return []
 
-    def attempt_trade_with_retry(self, symbol):
-        """Attempt to place a trade with retry logic"""
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                print(f"Attempt {attempt}/{self.max_retries} to trade {symbol}")
-                
-                # Attempt to place long trade
-                result = self.trader.place_long_trade(symbol)
-                
-                if result['success']:
-                    print(f"Successfully placed trade for {symbol} on attempt {attempt}")
-                    if attempt > 1:
-                        self.slack.post_retry_notification(symbol, attempt, success=True)
-                    return True
-                else:
-                    print(f"Trade failed for {symbol} on attempt {attempt}: {result.get('error', 'Unknown error')}")
+    def get_trade_amount(self):
+        """Calculate trade amount based on futures balance and balance percentage"""
+        try:
+            # Get current futures balance
+            balance = self.trader.get_futures_balance()
+            if balance <= 0:
+                print("❌ No USDT balance available")
+                return 0
+            
+            # Get balance percentage from trader (which loads it from .env)
+            balance_percentage = self.trader.balance_percentage
+            
+            # Calculate trade amount
+            trade_amount = balance * (balance_percentage / 100)
+            
+            print(f"💰 Futures balance: ${balance:.2f} USDT")
+            print(f"📊 Using {balance_percentage}% of balance: ${trade_amount:.2f}")
+            
+            return trade_amount
+            
+        except Exception as e:
+            print(f"❌ Error calculating trade amount: {e}")
+            return 0
+
+    def execute_trade_attempts(self, symbol):
+        """Attempt to place ONE trade every 15 seconds for up to 8 attempts (2 minutes)"""
+        try:
+            # Calculate trade amount based on current balance
+            trade_amount = self.get_trade_amount()
+            if trade_amount <= 0:
+                print("❌ Cannot proceed: Invalid trade amount")
+                return False
+            
+            print(f"Starting trade attempts for {symbol}")
+            print(f"Strategy: Attempt ONE trade of ${trade_amount:.2f} every {self.trade_interval} seconds")
+            print(f"Max attempts: {self.total_trades} (will stop once successful)")
+            
+            failed_attempts = []
+            successful_trade = None
+            trade_placed = False
+            
+            for attempt_num in range(1, self.total_trades + 1):
+                try:
+                    print(f"\n--- Attempt #{attempt_num}/{self.total_trades} for {symbol} ---")
+                    print(f"Time: {datetime.now().strftime('%H:%M:%S')}")
                     
-                    if attempt < self.max_retries:
-                        print(f"Retrying in {self.retry_delay} seconds...")
-                        self.slack.post_retry_notification(symbol, attempt, success=False)
-                        time.sleep(self.retry_delay)
+                    # Place fixed amount trade without order splitting
+                    result = self.trader.place_fixed_amount_trade(symbol, trade_amount)
                     
-            except Exception as e:
-                error_msg = f"Exception during trade attempt {attempt} for {symbol}: {e}"
-                print(error_msg)
-                
-                if attempt < self.max_retries:
-                    print(f"Retrying in {self.retry_delay} seconds...")
-                    time.sleep(self.retry_delay)
-                else:
-                    self.slack.post_error_to_slack(error_msg)
-        
-        print(f"All {self.max_retries} attempts failed for {symbol}")
-        return False
+                    if result['success']:
+                        print(f"✅ Trade SUCCESSFUL on attempt #{attempt_num}!")
+                        print(f"🎯 STOPPING further attempts - trade placed successfully")
+                        
+                        successful_trade = {
+                            'attempt_number': attempt_num,
+                            'timestamp': datetime.now().strftime('%H:%M:%S'),
+                            'result': result
+                        }
+                        trade_placed = True
+                        break  # EXIT LOOP - No more attempts needed
+                    else:
+                        print(f"❌ Attempt #{attempt_num} failed: {result.get('error', 'Unknown error')}")
+                        failed_attempts.append({
+                            'attempt_number': attempt_num,
+                            'timestamp': datetime.now().strftime('%H:%M:%S'),
+                            'error': result.get('error', 'Unknown error')
+                        })
+                        
+                        # Wait 15 seconds before next attempt (except for the last attempt)
+                        if attempt_num < self.total_trades:
+                            print(f"⏰ Waiting {self.trade_interval} seconds before next attempt...")
+                            time.sleep(self.trade_interval)
+                    
+                except Exception as e:
+                    error_msg = f"Exception during attempt #{attempt_num} for {symbol}: {e}"
+                    print(f"❌ {error_msg}")
+                    failed_attempts.append({
+                        'attempt_number': attempt_num,
+                        'timestamp': datetime.now().strftime('%H:%M:%S'),
+                        'error': str(e)
+                    })
+                    
+                    # Continue with next attempt even if current one failed
+                    if attempt_num < self.total_trades:
+                        print(f"⏰ Waiting {self.trade_interval} seconds before next attempt...")
+                        time.sleep(self.trade_interval)
+            
+            # Summary
+            print(f"\n🎯 TRADE ATTEMPTS SUMMARY for {symbol}:")
+            print(f"Total attempts made: {len(failed_attempts) + (1 if trade_placed else 0)}")
+            print(f"Trade placed: {'✅ YES' if trade_placed else '❌ NO'}")
+            print(f"Failed attempts: {len(failed_attempts)}")
+            
+            if trade_placed:
+                print(f"✅ SUCCESS: Trade placed on attempt #{successful_trade['attempt_number']}")
+                print(f"💰 Trade amount: ${trade_amount:.2f}")
+            else:
+                print(f"❌ FAILED: All {self.total_trades} attempts failed")
+            
+            # Send summary notification to Slack
+            summary_info = {
+                'symbol': symbol,
+                'total_attempts': len(failed_attempts) + (1 if trade_placed else 0),
+                'max_attempts': self.total_trades,
+                'trade_placed': trade_placed,
+                'successful_attempt': successful_trade['attempt_number'] if trade_placed else None,
+                'failed_attempts': len(failed_attempts),
+                'trade_amount': trade_amount,
+                'failed_attempt_numbers': [a['attempt_number'] for a in failed_attempts],
+                'strategy': 'Single trade with multiple attempts'
+            }
+            
+            self.slack.post_trade_attempts_summary(summary_info)
+            
+            return trade_placed  # Return True only if trade was successfully placed
+            
+        except Exception as e:
+            error_msg = f"Critical error during trade attempts for {symbol}: {e}"
+            print(error_msg)
+            self.slack.post_error_to_slack(error_msg)
+            return False
 
     def process_new_listing(self, symbol):
-        """Process a new listing by attempting to trade it"""
+        """Process a new listing by waiting 15 seconds then attempting to place one trade"""
         try:
             # Send new listing alert to Slack
             self.slack.post_new_listing_alert(symbol)
@@ -198,8 +294,12 @@ class ListingMonitorBot:
             self.processed_pairs.add(symbol)
             self.save_data()
             
-            # Attempt to place trade with retry logic
-            success = self.attempt_trade_with_retry(symbol)
+            # Wait 15 seconds after listing detection before starting trade attempts
+            print(f"⏰ Waiting 15 seconds before starting trade attempts for {symbol}...")
+            time.sleep(15)
+            
+            # Execute trade attempts (one trade, multiple attempts until success)
+            success = self.execute_trade_attempts(symbol)
             
             if success:
                 print(f"Successfully processed new listing: {symbol}")
@@ -298,8 +398,49 @@ class ListingMonitorBot:
             self.slack.post_error_to_slack(error_msg)
             raise
 
+def update_futures_pairs_data():
+    """Download and update futures_pairs.json with current Binance data"""
+    try:
+        print("🔄 Updating futures pairs data...")
+        
+        # Get current futures pairs from API
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        pairs = []
+        for symbol in data['symbols']:
+            if symbol['status'] == 'TRADING':
+                pairs.append(symbol['symbol'])
+        
+        # Backup existing file if it exists
+        if os.path.exists('futures_pairs.json'):
+            backup_name = f"futures_pairs.json.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            os.rename('futures_pairs.json', backup_name)
+            print(f"📁 Backed up existing file as {backup_name}")
+        
+        # Save new data
+        with open('futures_pairs.json', 'w') as f:
+            json.dump(pairs, f, indent=2)
+        
+        print(f"✅ Updated futures_pairs.json with {len(pairs)} current pairs")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating futures pairs data: {e}")
+        return False
+
 if __name__ == "__main__":
     try:
+        # First, update futures pairs data to ensure we have current listings
+        print("🚀 === Binance New Listing Monitor Bot ===")
+        update_success = update_futures_pairs_data()
+        
+        if not update_success:
+            print("⚠️  Warning: Could not update futures pairs data, using existing file...")
+        
+        print("🤖 Starting bot...")
         bot = ListingMonitorBot()
         bot.run()
     except Exception as e:

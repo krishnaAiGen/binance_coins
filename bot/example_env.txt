@@ -1,0 +1,39 @@
+# Copy this file to .env and fill in your actual values
+# cp example_env.txt .env
+
+# ===== BINANCE API CONFIGURATION =====
+BINANCE_API_KEY=your_binance_api_key_here
+BINANCE_API_SECRET=your_binance_api_secret_here
+
+# ===== SLACK NOTIFICATION CONFIGURATION =====
+SLACK_WEBHOOK_URL=your_slack_webhook_url_here
+
+# ===== TRADING PARAMETERS =====
+# Percentage of account balance to use for trading (trade amount = balance × percentage)
+BALANCE_PERCENTAGE=10       # Use 10% of balance (e.g., if balance=$1000, trade=$100)
+
+# Trading strategy parameters (loaded from .env)
+TARGET_PROFIT_PERCENT=15    # Take profit percentage (e.g., 15 = 15%)
+STOP_LOSS_PERCENT=5         # Stop loss percentage (e.g., 5 = 5%)
+LEVERAGE=3                  # Leverage multiplier (e.g., 3 = 3x leverage)
+
+# ===== BOT MONITORING CONFIGURATION =====
+# How often to check for new listings (in seconds)
+CHECK_INTERVAL=60
+
+# Retry configuration for failed trades
+RETRY_DELAY=2               # Seconds to wait between retry attempts
+MAX_RETRIES=3               # Maximum number of retry attempts
+
+# ===== TRADING STRATEGY EXPLANATION =====
+# New Strategy:
+# 1. Bot detects new listing
+# 2. Waits 15 seconds after detection
+# 3. Calculates trade amount: Current Balance × BALANCE_PERCENTAGE
+# 4. Attempts to place ONE trade of calculated amount every 15 seconds for up to 8 attempts (2 minutes total)
+# 5. STOPS attempting once trade is successfully placed (won't place multiple trades)
+# 6. Each successful trade has automatic Stop Loss and Take Profit
+# 7. No order splitting - trade is placed as a single order
+# 8. Handles Binance restrictions in first 15-30 seconds after listing
+#
+# Example: If balance = $1000 and BALANCE_PERCENTAGE = 10, trade amount = $100
