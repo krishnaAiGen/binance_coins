@@ -362,7 +362,6 @@ class ListingMonitorBot:
                 
                 # Detect new listings
                 new_listings = self.detect_new_listings()
-                new_listings = ['BLESSUSDT']
                 
                 if new_listings:
                     print(f"Found {len(new_listings)} new listings: {new_listings}")
