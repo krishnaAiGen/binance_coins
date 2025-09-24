@@ -58,15 +58,62 @@ class FuturesTrader:
             print(f"Error getting futures balance: {e}")
             self.slack.post_error_to_slack(f"Error getting futures balance: {e}")
             return 0.0
+    
+    def get_available_futures_balance(self):
+        """Get available USDT balance for trading (excluding locked in positions)"""
+        try:
+            balance_info = self.client.futures_account_balance()
+            for asset in balance_info:
+                if asset['asset'] == 'USDT':
+                    # Use availableBalance instead of balance
+                    available_balance = float(asset.get('availableBalance', asset['balance']))
+                    total_balance = float(asset['balance'])
+                    locked_balance = total_balance - available_balance
+                    
+                    print(f"💰 Futures Balance Summary:")
+                    print(f"   Total USDT: ${total_balance:.2f}")
+                    print(f"   Available: ${available_balance:.2f}")
+                    print(f"   Locked: ${locked_balance:.2f}")
+                    
+                    return available_balance
+            return 0.0
+        except Exception as e:
+            print(f"Error getting available futures balance: {e}")
+            self.slack.post_error_to_slack(f"Error getting available futures balance: {e}")
+            return 0.0
 
     def get_current_price(self, symbol):
-        """Get current price for a symbol"""
+        """Get current price for a futures symbol"""
         try:
-            ticker = self.client.get_symbol_ticker(symbol=symbol)
-            return float(ticker['price'])
+            # First try futures mark price (most reliable for futures)
+            mark_price = self.client.futures_mark_price(symbol=symbol)
+            return float(mark_price['markPrice'])
+        except Exception as e1:
+            try:
+                # Fallback to futures ticker price
+                ticker = self.client.futures_symbol_ticker(symbol=symbol)
+                return float(ticker['price'])
+            except Exception as e2:
+                try:
+                    # Last fallback: spot price (for newly listed symbols)
+                    ticker = self.client.get_symbol_ticker(symbol=symbol)
+                    return float(ticker['price'])
+                except Exception as e3:
+                    print(f"Error getting current price for {symbol}:")
+                    print(f"  Futures mark price: {e1}")
+                    print(f"  Futures ticker: {e2}")
+                    print(f"  Spot ticker: {e3}")
+                    return None
+
+    def is_valid_futures_symbol(self, symbol):
+        """Check if symbol exists on Binance Futures"""
+        try:
+            exchange_info = self.client.futures_exchange_info()
+            valid_symbols = [s['symbol'] for s in exchange_info['symbols'] if s['status'] == 'TRADING']
+            return symbol in valid_symbols
         except Exception as e:
-            print(f"Error getting current price for {symbol}: {e}")
-            return None
+            print(f"Error checking symbol validity for {symbol}: {e}")
+            return False
 
     def get_symbol_precision(self, symbol):
         """Get quantity precision for a symbol"""
@@ -188,6 +235,10 @@ class FuturesTrader:
         """Place a trade for a specific USD amount without order splitting"""
         try:
             print(f"Attempting to place ${usd_amount} trade for {symbol}")
+            
+            # First validate that symbol exists on futures
+            if not self.is_valid_futures_symbol(symbol):
+                raise Exception(f"Symbol {symbol} is not available on Binance Futures or not trading")
             
             # Get current price
             current_price = self.get_current_price(symbol)

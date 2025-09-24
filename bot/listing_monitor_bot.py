@@ -163,22 +163,22 @@ class ListingMonitorBot:
             return []
 
     def get_trade_amount(self):
-        """Calculate trade amount based on futures balance and balance percentage"""
+        """Calculate trade amount based on available futures balance and balance percentage"""
         try:
-            # Get current futures balance
-            balance = self.trader.get_futures_balance()
-            if balance <= 0:
-                print("❌ No USDT balance available")
+            # Get available futures balance (excludes locked funds in positions)
+            available_balance = self.trader.get_available_futures_balance()
+            if available_balance <= 0:
+                print("❌ No available USDT balance for trading")
                 return 0
             
             # Get balance percentage from trader (which loads it from .env)
             balance_percentage = self.trader.balance_percentage
             
-            # Calculate trade amount
-            trade_amount = balance * (balance_percentage / 100)
+            # Calculate trade amount based on available balance
+            trade_amount = available_balance * (balance_percentage / 100)
             
-            print(f"💰 Futures balance: ${balance:.2f} USDT")
-            print(f"📊 Using {balance_percentage}% of balance: ${trade_amount:.2f}")
+            print(f"💰 Available futures balance: ${available_balance:.2f} USDT")
+            print(f"📊 Using {balance_percentage}% of available balance: ${trade_amount:.2f}")
             
             return trade_amount
             
@@ -296,7 +296,7 @@ class ListingMonitorBot:
             
             # Wait 15 seconds after listing detection before starting trade attempts
             print(f"⏰ Waiting 15 seconds before starting trade attempts for {symbol}...")
-            time.sleep(15)
+            time.sleep(10)
             
             # Execute trade attempts (one trade, multiple attempts until success)
             success = self.execute_trade_attempts(symbol)
@@ -362,6 +362,7 @@ class ListingMonitorBot:
                 
                 # Detect new listings
                 new_listings = self.detect_new_listings()
+                new_listings = ['BLESSUSDT']
                 
                 if new_listings:
                     print(f"Found {len(new_listings)} new listings: {new_listings}")
